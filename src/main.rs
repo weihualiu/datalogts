@@ -1,40 +1,34 @@
-
 #![deny(warnings)]
 
 use std::io::{self, Write};
 use std::net::TcpStream;
 
-// use futures_util::TryStreamExt;
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use urlparse::parse_qs;
+use std::thread;
+use std::time::Duration;
+
+use clap::{App, Arg, ArgMatches};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
+
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref TRANSFER_DATA_CHANNEL: (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
+}
 
 /// This is our service handler. It receives a Request, routes on its
 /// path, and returns a Future of a Response.
 async fn echo(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
-        // Convert to uppercase before sending back to client using a stream.
-        // (&Method::POST, "/") => {
-        //     let chunk_stream = req.into_body().map_ok(|chunk| {
-        //         chunk
-        //             .iter()
-        //             .map(|byte| byte.to_ascii_uppercase())
-        //             .collect::<Vec<u8>>()
-        //     });
-        //     Ok(Response::new(Body::wrap_stream(chunk_stream)))
-        // }
-
-        // Reverse the entire body before sending back to the client.
-        //
-        // Since we don't know the end yet, we can't simply stream
-        // the chunks as they arrive as we did with the above uppercase endpoint.
-        // So here we do `.await` on the future, waiting on concatenating the full body,
-        // then afterwards the content can be reversed. Only then can we return a `Response`.
         (&Method::POST, "/") => {
             let whole_body = hyper::body::to_bytes(req.into_body()).await?;
             let body_vec = whole_body.iter().cloned().collect::<Vec<u8>>();
-            tcp_send(&body_vec).unwrap();
-            
+
             // println!("{:?}", body_str);
+            let data = package_build(body_vec);
+            TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
 
             Ok(Response::new(Body::from("ok")))
         }
@@ -48,28 +42,91 @@ async fn echo(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
     }
 }
 
+fn parse_args() -> ArgMatches<'static> {
+    let matches = App::new("datalogts")
+        .help_message("")
+        .version("1.0")
+        .author("liu.weihua@rytong.com")
+        .arg(
+            Arg::with_name("http_port")
+                .short("hp")
+                .long("hport")
+                .help("Sets a custom config file")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("tcp_host")
+                .short("th")
+                .long("thost")
+                .help("Sets a custom config file")
+                .takes_value(true),
+        )
+        .get_matches();
+    matches
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let matches = parse_args();
 
+    let http_port = matches.value_of("http_port").unwrap_or("8000");
+    let tcp_host = matches.value_of("tcp_host").unwrap_or("127.0.0.1:8001");
 
-    let addr = ([127, 0, 0, 1], 8000).into();
+    let http_port = String::from(http_port).parse::<u16>().unwrap();
 
+    tcp_send(&tcp_host)?;
+
+    let addr = ([0, 0, 0, 0], http_port).into();
     let service = make_service_fn(|_| async { Ok::<_, hyper::Error>(service_fn(echo)) });
-
     let server = Server::bind(&addr).serve(service);
-
     println!("Listening on http://{}", addr);
-
     server.await?;
+    Ok(())
+}
+
+fn tcp_send(host: &str) -> io::Result<()> {
+    let mut stream = TcpStream::connect(host)?;
+
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(120));
+        let data = TRANSFER_DATA_CHANNEL.1.recv().unwrap();
+        if !data.is_empty() {
+            stream.write(&data).expect("failed to write");
+        }
+    });
+
+    thread::spawn(move || loop {
+        println!("heartbeat.......");
+        thread::sleep(Duration::from_secs(3));
+        let data: Vec<u8> = vec![0xf0, 0x0, 0x0, 0x0, 0x7, 0x0, 0xfe];
+        TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
+        println!("heartbeat end");
+    });
 
     Ok(())
 }
 
-
-fn tcp_send(data: &Vec<u8>) -> io::Result<()> {
-    let mut stream = TcpStream::connect("127.0.0.1:10032")?;
-    // let mut input = String::new();
-    stream.write(data).expect("failed to write");
-    Ok(())
+/**
+ * 数据包组装
+ */
+fn package_build(data: Vec<u8>) -> Vec<u8> {
+    let str = String::from_utf8(data).expect("Found invalid UTF-8");
+    let map = parse_qs(str.as_str());
+    let _api = map.get(&"api".to_string()).unwrap();
+    let _env = map.get(&"env".to_string()).unwrap();
+    let content = map.get(&"data".to_string()).unwrap();
+    
+    let len = 1 + 4 + 1+ 3*12 + content.len() + 1;
+    let mut offset: usize = 0;
+    let mut res: Vec<u8> = vec![0; len];
+    res[offset] = 0xf0;
+    offset+=1;
+    offset+=4;
+    offset+=1;
+    offset+=12;
+    offset+=12;
+    offset+=12;
+    offset+=content.len();
+    res[offset] = 0xfe;
+    res
 }
