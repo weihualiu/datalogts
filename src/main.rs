@@ -4,13 +4,18 @@ use std::io::{self, Write};
 use std::net::TcpStream;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use urlparse::parse_qs;
 use std::thread;
 use std::time::Duration;
+use urlparse::parse_qs;
 
 use clap::{App, Arg, ArgMatches};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
+
+use byteorder::{BigEndian, WriteBytesExt};
+use chrono::prelude::*;
+//use daemonize::Daemonize;
+//use std::fs::File;
 
 use lazy_static::lazy_static;
 
@@ -26,8 +31,9 @@ async fn echo(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
             let whole_body = hyper::body::to_bytes(req.into_body()).await?;
             let body_vec = whole_body.iter().cloned().collect::<Vec<u8>>();
 
-            // println!("{:?}", body_str);
+            println!("{:?}", body_vec);
             let data = package_build(body_vec);
+            println!("http transfer package: {:?}", data);
             TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
 
             Ok(Response::new(Body::from("ok")))
@@ -67,6 +73,7 @@ fn parse_args() -> ArgMatches<'static> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    //async fn http_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let matches = parse_args();
 
     let http_port = matches.value_of("http_port").unwrap_or("8000");
@@ -83,6 +90,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     server.await?;
     Ok(())
 }
+
+//fn main() {
+//    let stdout = File::create("/tmp/datalogts.out").unwrap();
+//    let stderr = File::create("/tmp/datalogts.err").unwrap();
+//
+//    let daemonize = Daemonize::new()
+//        .pid_file("/tmp/datalogts.pid") // Every method except `new` and `start`
+//        .chown_pid_file(true) // is optional, see `Daemonize` documentation
+//        .working_directory("/tmp") // for default behaviour.
+//        //.user("nobody")
+//        //.group("daemon") // Group name
+//        .group(2) // or group id.
+//        //.umask(0o777) // Set umask, `0o027` by default.
+//        .stdout(stdout) // Redirect stdout to `/tmp/daemon.out`.
+//        .stderr(stderr) // Redirect stderr to `/tmp/daemon.err`.
+//        .exit_action(|| println!("Executed before master process exits"))
+//        .privileged_action(|| "Executed before drop privileges");
+//
+//    match daemonize.start() {
+//        Ok(_) => println!("Success, daemonized"),
+//        Err(e) => eprintln!("Error, {}", e),
+//    }
+//    tokio::runtime::Builder::new_multi_thread()
+//        .enable_all()
+//        .build()
+//        .unwrap()
+//        .block_on(async {
+//            http_server().await.unwrap();
+//            println!("Hello world");
+//        });
+//}
 
 fn tcp_send(host: &str) -> io::Result<()> {
     let mut stream = TcpStream::connect(host)?;
@@ -107,26 +145,44 @@ fn tcp_send(host: &str) -> io::Result<()> {
 }
 
 /**
- * 数据包组装
+ * package build transer
  */
 fn package_build(data: Vec<u8>) -> Vec<u8> {
     let str = String::from_utf8(data).expect("Found invalid UTF-8");
     let map = parse_qs(str.as_str());
-    let _api = map.get(&"api".to_string()).unwrap();
-    let _env = map.get(&"env".to_string()).unwrap();
+    let api = map.get(&"api".to_string()).unwrap();
+    let app = map.get(&"app".to_string()).unwrap();
+    let env = map.get(&"env".to_string()).unwrap();
     let content = map.get(&"data".to_string()).unwrap();
-    
-    let len = 1 + 4 + 1+ 3*12 + content.len() + 1;
+    let content_slice = content.get(0).unwrap().as_bytes();
+
+    let len = 1 + 4 + 1 + 1 + 3 * 12 + 8 + content_slice.len() + 1;
     let mut offset: usize = 0;
     let mut res: Vec<u8> = vec![0; len];
     res[offset] = 0xf0;
-    offset+=1;
-    offset+=4;
-    offset+=1;
-    offset+=12;
-    offset+=12;
-    offset+=12;
-    offset+=content.len();
+    offset += 1;
+    let mut len_vec = vec![];
+    len_vec.write_u32::<BigEndian>(len as u32).unwrap();
+    res[offset..offset + 4].copy_from_slice(len_vec.as_slice());
+    offset += 4;
+    res[offset] = 0x01;
+    offset += 1;
+    res[offset] = 0x03;
+    offset += 1;
+    let app_slice = app.get(0).unwrap().as_bytes();
+    res[offset..offset + app_slice.len()].copy_from_slice(app_slice);
+    offset += 12;
+    let env_slice = env.get(0).unwrap().as_bytes();
+    res[offset..offset + env_slice.len()].copy_from_slice(env_slice);
+    offset += 12;
+    let api_slice = api.get(0).unwrap().as_bytes();
+    res[offset..offset + api_slice.len()].copy_from_slice(api_slice);
+    offset += 12;
+    let datestr = Utc::today().format("%Y%m%d");
+    res[offset..offset + 8].copy_from_slice(datestr.to_string().as_bytes());
+    offset += 8;
+    res[offset..offset + content_slice.len()].copy_from_slice(content_slice);
+    offset += content_slice.len();
     res[offset] = 0xfe;
     res
 }
