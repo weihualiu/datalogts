@@ -31,9 +31,9 @@ async fn echo(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
             let whole_body = hyper::body::to_bytes(req.into_body()).await?;
             let body_vec = whole_body.iter().cloned().collect::<Vec<u8>>();
 
-            println!("{:?}", body_vec);
+            // println!("{:?}", body_vec);
             let data = package_build(body_vec);
-            println!("http transfer package: {:?}", data);
+            // println!("http transfer package: {:?}", data);
             TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
 
             Ok(Response::new(Body::from("ok")))
@@ -136,11 +136,11 @@ fn tcp_send(host: &str) -> io::Result<()> {
     });
 
     thread::spawn(move || loop {
-        println!("heartbeat.......");
+        // println!("heartbeat.......");
         thread::sleep(Duration::from_secs(3));
         let data: Vec<u8> = vec![0xf0, 0x0, 0x0, 0x0, 0x7, 0x0, 0xfe];
         TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
-        println!("heartbeat end");
+        // println!("heartbeat end");
     });
 
     Ok(())
