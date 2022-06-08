@@ -30,12 +30,8 @@ async fn echo(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
         (&Method::POST, "/") => {
             let whole_body = hyper::body::to_bytes(req.into_body()).await?;
             let body_vec = whole_body.iter().cloned().collect::<Vec<u8>>();
-
-            // println!("{:?}", body_vec);
             let data = package_build(body_vec);
-            // println!("http transfer package: {:?}", data);
             TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
-
             Ok(Response::new(Body::from("ok")))
         }
 
@@ -84,7 +80,6 @@ async fn http_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = ([0, 0, 0, 0], http_port).into();
     let service = make_service_fn(|_| async { Ok::<_, hyper::Error>(service_fn(echo)) });
     let server = Server::bind(&addr).serve(service);
-    println!("Listening on http://{}", addr);
     server.await?;
     Ok(())
 }
@@ -120,7 +115,6 @@ fn main() {
         .unwrap()
         .block_on(async {
             http_server().await.unwrap();
-            println!("Hello world");
         })
 }
 
@@ -136,11 +130,9 @@ fn tcp_send(host: &str) -> io::Result<()> {
     });
 
     thread::spawn(move || loop {
-        // println!("heartbeat.......");
         thread::sleep(Duration::from_secs(3));
         let data: Vec<u8> = vec![0xf0, 0x0, 0x0, 0x0, 0x7, 0x0, 0xfe];
         TRANSFER_DATA_CHANNEL.0.send(data).unwrap();
-        // println!("heartbeat end");
     });
 
     Ok(())
