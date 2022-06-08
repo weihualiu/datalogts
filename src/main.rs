@@ -14,8 +14,8 @@ use hyper::{Body, Method, Request, Response, Server, StatusCode};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use chrono::prelude::*;
-//use daemonize::Daemonize;
-//use std::fs::File;
+use daemonize::Daemonize;
+use std::fs::File;
 
 use lazy_static::lazy_static;
 
@@ -71,9 +71,7 @@ fn parse_args() -> ArgMatches<'static> {
     matches
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    //async fn http_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn http_server() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let matches = parse_args();
 
     let http_port = matches.value_of("http_port").unwrap_or("8000");
@@ -91,36 +89,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-//fn main() {
-//    let stdout = File::create("/tmp/datalogts.out").unwrap();
-//    let stderr = File::create("/tmp/datalogts.err").unwrap();
-//
-//    let daemonize = Daemonize::new()
-//        .pid_file("/tmp/datalogts.pid") // Every method except `new` and `start`
-//        .chown_pid_file(true) // is optional, see `Daemonize` documentation
-//        .working_directory("/tmp") // for default behaviour.
-//        //.user("nobody")
-//        //.group("daemon") // Group name
-//        .group(2) // or group id.
-//        //.umask(0o777) // Set umask, `0o027` by default.
-//        .stdout(stdout) // Redirect stdout to `/tmp/daemon.out`.
-//        .stderr(stderr) // Redirect stderr to `/tmp/daemon.err`.
-//        .exit_action(|| println!("Executed before master process exits"))
-//        .privileged_action(|| "Executed before drop privileges");
-//
-//    match daemonize.start() {
-//        Ok(_) => println!("Success, daemonized"),
-//        Err(e) => eprintln!("Error, {}", e),
-//    }
-//    tokio::runtime::Builder::new_multi_thread()
-//        .enable_all()
-//        .build()
-//        .unwrap()
-//        .block_on(async {
-//            http_server().await.unwrap();
-//            println!("Hello world");
-//        });
-//}
+fn main() {
+    let stdout = File::create("datalogts.out").unwrap();
+    let stderr = File::create("datalogts.err").unwrap();
+
+    let daemonize = Daemonize::new()
+        .pid_file("datalogts.pid") // Every method except `new` and `start`
+        .chown_pid_file(true) // is optional, see `Daemonize` documentation
+        .working_directory(".") // for default behaviour.
+        .user("nobody")
+        .group("daemon") // Group name
+        // .group(2) // or group id.
+        .umask(0o777) // Set umask, `0o027` by default.
+        .chroot(".")
+        .stdout(stdout) // Redirect stdout to `/tmp/daemon.out`.
+        .stderr(stderr) // Redirect stderr to `/tmp/daemon.err`.
+        .exit_action(|| {
+            println!("Executed before master process exits");
+        })
+        .privileged_action(|| "Executed before drop privileges");
+
+    match daemonize.start() {
+        Ok(_) => println!("Success, daemonized"),
+        Err(e) => eprintln!("Error, {}", e),
+    }
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            http_server().await.unwrap();
+            println!("Hello world");
+        })
+}
 
 fn tcp_send(host: &str) -> io::Result<()> {
     let mut stream = TcpStream::connect(host)?;
